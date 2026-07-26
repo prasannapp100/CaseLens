@@ -111,8 +111,10 @@ export default function MainWorkspace() {
     const sourceRef = new URLSearchParams(window.location.search).get("source")
     const item = sourceRef ? findSource(store.items, sourceRef) : null
     if (item) {
-      setSelected(item)
-      setSection("Evidence")
+      queueMicrotask(() => {
+        setSelected(item)
+        setSection("Evidence")
+      })
     }
   }, [store.items])
 
