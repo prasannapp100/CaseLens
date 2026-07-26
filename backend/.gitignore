@@ -1,0 +1,6 @@
+.venv/
+venv/
+.env
+__pycache__/
+generated_analysis.json
+node_modules/
