@@ -18,6 +18,28 @@ function safeName(name: string, index: number) {
   return `${String(index + 1).padStart(2, "0")}-${cleaned}`
 }
 
+function timestampSegments(result: {
+  diarized_transcript?: { entries?: Array<{ transcript: string; start_time_seconds: number; end_time_seconds: number; speaker_id?: string }> }
+  timestamps?: { words?: string[]; start_time_seconds?: number[]; end_time_seconds?: number[] }
+}) {
+  const diarized = result.diarized_transcript?.entries
+  if (diarized?.length) return diarized.map((entry) => ({
+    text: entry.transcript,
+    start: entry.start_time_seconds,
+    end: entry.end_time_seconds,
+    speaker: entry.speaker_id,
+  }))
+  const words = result.timestamps?.words || []
+  const starts = result.timestamps?.start_time_seconds || []
+  const ends = result.timestamps?.end_time_seconds || []
+  const segments = []
+  for (let index = 0; index < words.length; index += 12) {
+    const last = Math.min(index + 11, words.length - 1)
+    segments.push({ text: words.slice(index, last + 1).join(" "), start: starts[index] || 0, end: ends[last] || starts[index] || 0 })
+  }
+  return segments
+}
+
 function splitText(text: string, limit = 900) {
   const chunks: string[] = []
   let remaining = text.trim()
@@ -127,11 +149,13 @@ export async function POST(request: Request) {
       const original = originalNames.get(uploadedName) || { name: uploadedName, type: "audio/mpeg" }
       const result = JSON.parse(await readFile(join(outputsDirectory, outputName), "utf8"))
       const transcript = String(result.transcript || "")
+      const segments = timestampSegments(result)
       items.push({
         fileName: original.name,
         mediaType: original.type,
         transcript,
         languageCode: result.language_code,
+        segments,
         translatedText: translateTranscript ? await translate(transcript, targetLanguage, key) : undefined,
       })
     }

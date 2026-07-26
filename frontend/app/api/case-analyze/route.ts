@@ -40,7 +40,7 @@ export async function POST(request: Request) {
     if (!key) return Response.json({ error: "SARVAM_API_KEY is not configured." }, { status: 503 })
     const form = await request.formData()
     const file = form.get("file")
-    if (!(file instanceof File)) return Response.json({ error: "Upload a WhatsApp TXT export." }, { status: 400 })
+    if (!(file instanceof File)) return Response.json({ error: "Upload a TXT evidence export." }, { status: 400 })
     const sourceText = await file.text()
     if (!sourceText.trim()) return Response.json({ error: "The uploaded TXT file is empty." }, { status: 400 })
     if (sourceText.length > 180000) return Response.json({ error: "This first version supports TXT exports up to 180,000 characters." }, { status: 413 })
@@ -138,7 +138,7 @@ export async function POST(request: Request) {
 Resolve aliases conservatively. Keep every claim atomic. Cluster claims that describe the same real-world event. Only flag genuine comparable conflicts. Every claim and event must preserve exact provenance.
 Be concise. Prioritize only the most legally material content. Hard limits: at most 12 entities, 18 claims, 10 events, 6 contradictions, and 6 missing-evidence items. Keep overview under 80 words, each claim under 30 words, and every explanation under 50 words.`,
           },
-          { role: "user", content: `Analyze this WhatsApp export named "${file.name}":\n\n${sourceText}` },
+          { role: "user", content: `Analyze this evidence text named "${file.name}". Source markers in square brackets identify the originating file; preserve them in sourceRef fields:\n\n${sourceText}` },
         ],
       }),
     })
