@@ -713,12 +713,7 @@ function Overview({
                       </button>
                     )}
                     <div className="mt-4 grid grid-cols-2 gap-2">
-                      <button
-                        onClick={() => onGapAction(gap, false)}
-                        className="rounded-lg border px-3 py-2 text-xs font-semibold text-[#356d56]"
-                      >
-                        Ask follow-up
-                      </button>
+                      
                       <button
                         onClick={() => onGapAction(gap, true)}
                         className="rounded-lg bg-[#183f31] px-3 py-2 text-xs font-semibold text-white"
@@ -1394,19 +1389,7 @@ function UploadModal({ processing, progress, error, onClose, onProcess }) {
         ) : (
           <>
             <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {[
-                ["Video/audio", "Transcribe"],
-                ["WhatsApp TXT", "Analyze"],
-                ["PDF/scans", "Digitize"],
-                ["ZIP/TXT", "Extract"],
-              ].map(([title, action]) => (
-                <div key={title} className="rounded-xl border bg-[#fafaf8] p-3">
-                  <p className="text-xs font-semibold">{title}</p>
-                  <p className="mt-1 text-[10px] text-[#7f8781]">
-                    {action} with Sarvam
-                  </p>
-                </div>
-              ))}
+              
             </div>
             <label className="mt-4 grid min-h-40 cursor-pointer place-items-center rounded-xl border border-dashed bg-[#fafaf8] text-center">
               <div>
