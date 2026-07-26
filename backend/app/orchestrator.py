@@ -8,6 +8,7 @@ from .agents import (
     ContradictionAgent,
     EntityAgent,
     EvidenceGapAgent,
+    GraphAgent,
     TimelineAgent,
 )
 from .services.sarvam_client import SarvamClient
@@ -22,6 +23,7 @@ class CaseManager:
             TimelineAgent(client),
             ContradictionAgent(client),
             EvidenceGapAgent(client),
+            GraphAgent(client),
             CaseBriefAgent(client),
         ]
 
@@ -35,6 +37,7 @@ class CaseManager:
             "contradictions": [],
             "evidence_gaps": [],
             "follow_up_questions": [],
+            "graph": {"nodes": [], "edges": [], "stats": {}},
             "brief": {},
             "agent_runs": [],
         }
@@ -45,6 +48,7 @@ class CaseManager:
             "Timeline Agent": ["timeline"],
             "Contradiction Agent": ["contradictions"],
             "Evidence Gap Agent": ["evidence_gaps", "follow_up_questions"],
+            "Case Graph Agent": ["graph"],
             "Case Brief Agent": ["brief"],
         }
 
@@ -63,7 +67,8 @@ class CaseManager:
                     state["brief"] = result
                 else:
                     for key in output_keys[agent.name]:
-                        state[key] = result.get(key, [])
+                        default = {} if key == "graph" else []
+                        state[key] = result.get(key, default)
                 run_log.update(
                     {
                         "status": "completed",
@@ -94,7 +99,10 @@ class CaseManager:
             "Timeline Agent": "timeline",
             "Contradiction Agent": "contradictions",
             "Evidence Gap Agent": "evidence_gaps",
+            "Case Graph Agent": "graph",
             "Case Brief Agent": "brief",
         }
         value = state.get(mapping[agent_name])
+        if agent_name == "Case Graph Agent" and isinstance(value, dict):
+            return len(value.get("nodes", []))
         return len(value) if isinstance(value, list) else int(bool(value))
