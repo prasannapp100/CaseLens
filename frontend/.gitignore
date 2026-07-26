@@ -19,6 +19,8 @@
 /build
 /data/knowledge-base.json
 /data/knowledge-base.json.tmp
+/data/case-analyses.json
+/data/case-analyses.json.tmp
 
 # misc
 .DS_Store
