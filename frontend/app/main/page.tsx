@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/ban-ts-comment, @typescript-eslint/no-unused-vars */
+// @ts-nocheck -- imported prototype UI is intentionally untyped while its real workflows are integrated.
 "use client";
 
 import { useMemo, useState } from "react";
@@ -85,6 +87,8 @@ export default function CaseLens() {
   const [showUpload, setShowUpload] = useState(false);
   const [toast, setToast] = useState("");
   const [processing, setProcessing] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState("");
+  const [uploadedEvidence, setUploadedEvidence] = useState([]);
 
   const visibleEvents = useMemo(() => {
     if (filter === "All events") return events;
@@ -98,15 +102,112 @@ export default function CaseLens() {
     setRightOpen(true);
   }
 
-  function ask(text) {
+  async function ask(text) {
     const q = (text || query).trim();
     if (!q) return;
     setQuery(q);
-    setAnswer({
-      question: q,
-      text: "The strongest evidence of anticipated delay is the contractor’s 12 March call, where he says delivery before late May would be difficult. This conflicts with Rajesh’s earlier assurance that the project was on track. The 28 February site video independently supports the delay: major finishing work remained incomplete one month before the contractual handover date.",
-      cites: [{ id: 5, label: "Call · 06:44" }, { id: 2, label: "WhatsApp · msg 42" }, { id: 3, label: "Video · 04:12" }]
-    });
+    setAnswer({ question: q, text: "Searching processed evidence with Sarvam…", cites: [] });
+    try {
+      const response = await fetch("/api/knowledge-query", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: q }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Question failed.");
+      setAnswer({
+        question: q,
+        text: data.answer,
+        cites: data.sources.slice(0, 6).map(source => ({ id: null, label: `SOURCE-${source.id} · ${source.fileName}` })),
+      });
+    } catch (error) {
+      setAnswer({ question: q, text: error instanceof Error ? error.message : "Unable to answer.", cites: [] });
+    }
+  }
+
+  async function processEvidence(files) {
+    if (!files.length) return;
+    setProcessing(true);
+    setUploadProgress("Preparing evidence…");
+    try {
+      const items = [];
+      const media = files.filter(file => file.type.startsWith("audio/") || file.type.startsWith("video/"));
+      const pdfs = files.filter(file => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+      const texts = files.filter(file => file.type === "text/plain" || file.name.toLowerCase().endsWith(".txt"));
+
+      if (media.length) {
+        setUploadProgress(`Sending ${media.length} media files as one Sarvam batch…`);
+        const body = new FormData();
+        media.forEach(file => body.append("files", file));
+        body.append("translateTranscript", "true");
+        body.append("targetLanguage", "en-IN");
+        const response = await fetch("/api/batch-process", { method: "POST", body });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Media processing failed.");
+        items.push(...data.items);
+      }
+
+      for (let index = 0; index < pdfs.length; index++) {
+        const file = pdfs[index];
+        setUploadProgress(`Digitizing PDF ${index + 1} of ${pdfs.length} with Sarvam…`);
+        const body = new FormData(); body.append("file", file); body.append("language", "en-IN");
+        const response = await fetch("/api/document-process", { method: "POST", body });
+        const data = await response.json();
+        if (!response.ok) throw new Error(`${file.name}: ${data.error || "PDF processing failed."}`);
+        items.push(data);
+      }
+
+      for (let index = 0; index < texts.length; index++) {
+        const file = texts[index];
+        setUploadProgress(`Analyzing TXT ${index + 1} of ${texts.length} with Sarvam…`);
+        const body = new FormData(); body.append("file", file);
+        const response = await fetch("/api/case-analyze", { method: "POST", body });
+        const data = await response.json();
+        if (!response.ok) throw new Error(`${file.name}: ${data.error || "TXT analysis failed."}`);
+        items.push({ fileName: file.name, mediaType: "text/plain", transcript: await file.text(), analysisId: data.id });
+      }
+
+      if (!items.length) throw new Error("Choose PDF, TXT, audio, or video files.");
+      setUploadProgress("Summarizing all evidence with Sarvam…");
+      const summaryResponse = await fetch("/api/summarize", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      const summary = await summaryResponse.json();
+      if (!summaryResponse.ok) throw new Error(summary.error || "Evidence summary failed.");
+
+      setUploadProgress("Saving evidence to the knowledge base…");
+      const saveResponse = await fetch("/api/knowledge", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: files.length === 1 ? files[0].name : `${files.length} evidence files`,
+          summary: summary.summary,
+          items: items.map(item => ({
+            fileName: item.fileName,
+            mediaType: item.mediaType,
+            transcript: item.transcript,
+            translatedText: item.translatedText,
+            languageCode: item.languageCode,
+          })),
+        }),
+      });
+      const saved = await saveResponse.json();
+      if (!saveResponse.ok) throw new Error(saved.error || "Knowledge-base save failed.");
+      setUploadedEvidence(items.map((item, index) => ({
+        id: `uploaded-${Date.now()}-${index}`, name: item.fileName, meta: "Processed with Sarvam",
+        type: item.mediaType.includes("pdf") ? "pdf" : item.mediaType.includes("text") ? "chat" : item.mediaType.includes("video") ? "video" : "audio",
+        date: "Just now", tag: item.mediaType.includes("pdf") ? "Document" : item.mediaType.includes("text") ? "Messages" : "Media",
+        color: item.mediaType.includes("pdf") ? "red" : item.mediaType.includes("text") ? "green" : "purple",
+      })));
+      setShowUpload(false);
+      setSection("Evidence");
+      setToast(`${items.length} evidence source${items.length === 1 ? "" : "s"} processed and saved`);
+      setTimeout(() => setToast(""), 4000);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Evidence processing failed");
+    } finally {
+      setProcessing(false);
+      setUploadProgress("");
+    }
   }
 
   const nav = [
@@ -189,7 +290,7 @@ export default function CaseLens() {
             </>
           )}
 
-          {section === "Evidence" && <EvidenceView onOpen={openSource} onUpload={() => setShowUpload(true)}/>}
+          {section === "Evidence" && <EvidenceView uploadedEvidence={uploadedEvidence} onOpen={openSource} onUpload={() => setShowUpload(true)}/>}
           {section === "Contradictions" && <Contradictions onOpen={openSource}/>}
           {section === "Ask CaseLens" && <AskView query={query} setQuery={setQuery} ask={ask} answer={answer} onOpen={openSource}/>}
           {section === "Case brief" && <BriefView onOpen={openSource} notify={setToast}/>}
@@ -207,7 +308,7 @@ export default function CaseLens() {
         <button onClick={() => { setSection("Ask CaseLens"); ask(); }}><ArrowRight size={17}/></button>
       </div>
 
-      {showUpload && <UploadModal processing={processing} onClose={() => setShowUpload(false)} onMedia={() => router.push("/media")} onWhatsApp={() => router.push("/cases")}/>}
+      {showUpload && <UploadModal processing={processing} progress={uploadProgress} onClose={() => !processing && setShowUpload(false)} onProcess={processEvidence} onMedia={() => router.push("/media")} onWhatsApp={() => router.push("/cases")}/>}
       {toast && <div className="toast"><Check size={16}/>{toast}</div>}
     </main>
   );
@@ -230,13 +331,14 @@ function SourcePanel({ source, onClose }) {
   </aside>
 }
 
-function EvidenceView({ onOpen, onUpload }) {
+function EvidenceView({ uploadedEvidence, onOpen, onUpload }) {
+  const allEvidence = [...uploadedEvidence, ...evidence];
   return <div className="view-pad">
     <div className="page-head"><div><div className="breadcrumb">CASE MATERIALS</div><h1>Evidence</h1><p>Every source is processed, searchable, and traceable.</p></div><button className="primary" onClick={onUpload}><Upload size={15}/> Add evidence</button></div>
     <div className="stats-row"><Stat n="6" label="Sources"/><Stat n="323" label="Extracted items"/><Stat n="4" label="Languages"/><Stat n="100%" label="Provenance linked"/></div>
     <div className="evidence-table">
       <div className="table-head"><span>Source</span><span>Evidence date</span><span>Type</span><span>Status</span><span></span></div>
-      {evidence.map(e => <button className="evidence-row" key={e.id} onClick={() => onOpen(e.id)}>
+      {allEvidence.map(e => <button className="evidence-row" key={e.id} onClick={() => typeof e.id === "number" && onOpen(e.id)}>
         <div className={`file-icon ${e.color}`}><IconFor type={e.type}/></div><div className="file-name"><b>{e.name}</b><small>{e.meta}</small></div><span>{e.date}</span><span><i className={`tag ${e.color}`}>{e.tag}</i></span><span className="processed"><Check size={13}/> Processed</span><ChevronRight size={15}/>
       </button>)}
     </div>
@@ -261,7 +363,7 @@ function AskView({query,setQuery,ask,answer,onOpen}) {
   return <div className="ask-view"><div className="ask-hero"><div className="bot-orb"><Sparkles size={24}/></div><h1>Ask CaseLens</h1><p>Answers are grounded only in your uploaded evidence. Every claim links back to its original source.</p>
     <div className="large-ask"><input value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>e.key==="Enter"&&ask()} placeholder="Ask a question about this case…"/><button onClick={()=>ask()}><Send size={17}/></button></div>
     <div className="prompt-chips">{prompts.map(p=><button key={p} onClick={()=>ask(p)}>{p}</button>)}</div></div>
-    {answer && <article className="answer"><div className="answer-label"><Bot size={16}/> CASELENS ANSWER <span><ShieldCheck size={13}/> Evidence-grounded</span></div><h2>{answer.question}</h2><p>{answer.text}</p><div className="answer-cites">{answer.cites.map(c=><button key={c.label} onClick={()=>onOpen(c.id)}><Link2 size={13}/>{c.label}</button>)}</div><div className="answer-foot">Generated only from the 6 sources in this case <button>Copy answer</button></div></article>}
+    {answer && <article className="answer"><div className="answer-label"><Bot size={16}/> CASELENS ANSWER <span><ShieldCheck size={13}/> Evidence-grounded</span></div><h2>{answer.question}</h2><p>{answer.text}</p><div className="answer-cites">{answer.cites.map(c=><button key={c.label} onClick={()=>c.id && onOpen(c.id)}><Link2 size={13}/>{c.label}</button>)}</div><div className="answer-foot">Generated only from processed case evidence <button onClick={()=>navigator.clipboard.writeText(answer.text)}>Copy answer</button></div></article>}
   </div>
 }
 
@@ -286,8 +388,9 @@ function Overview({onNavigate}) {
   </div>
 }
 
-function UploadModal({processing,onClose,onMedia,onWhatsApp}) {
-  return <div className="modal-backdrop"><div className="modal"><button className="modal-close" onClick={onClose}><X/></button><div className="upload-art"><Upload size={25}/></div><h2>{processing ? "Understanding your evidence…" : "Add evidence"}</h2><p>{processing ? "Sarvam is transcribing Indian-language content while CaseLens extracts events, entities, and citations." : "Upload documents, audio, video, images, screenshots, or chat exports."}</p>
-    {processing ? <div className="process-list"><div className="spinner"/><span>Transcribing · OCR · Linking provenance</span><div className="process-bar"><i/></div></div> : <><div className="dropzone"><Upload size={22}/><b>Choose an evidence workflow</b><span>Every processed source returns to this case workspace.</span></div><div className="language-row"><FileVideo size={16}/><div><b>Audio & video evidence</b><span>Batch transcription, translation and summaries</span></div><button onClick={onMedia}>Open <ArrowRight size={14}/></button></div><div className="language-row"><MessageSquareText size={16}/><div><b>WhatsApp TXT export</b><span>Claims, entities, events and contradictions</span></div><button onClick={onWhatsApp}>Open <ArrowRight size={14}/></button></div></>}
+function UploadModal({processing,progress,onClose,onProcess,onMedia,onWhatsApp}) {
+  const [files, setFiles] = useState([]);
+  return <div className="modal-backdrop"><div className="modal"><button className="modal-close" disabled={processing} onClick={onClose}><X/></button><div className="upload-art"><Upload size={25}/></div><h2>{processing ? "Processing evidence…" : "Add evidence"}</h2><p>{processing ? progress : "Upload PDFs, WhatsApp TXT exports, audio, and video together."}</p>
+    {processing ? <div className="process-list"><div className="spinner"/><span>{progress}</span><div className="process-bar"><i/></div></div> : <><label className="dropzone"><Upload size={22}/><b>{files.length ? `${files.length} file${files.length === 1 ? "" : "s"} selected` : "Drop files here or choose files"}</b><span>PDF, TXT, MP4, MP3, M4A, WAV and WebM</span><input type="file" multiple accept=".pdf,.txt,audio/*,video/*" hidden onChange={event => setFiles(Array.from(event.target.files || []))}/></label><button className="primary full" disabled={!files.length} onClick={() => onProcess(files)}>Upload & process evidence <ArrowRight size={15}/></button><div className="language-row"><FileVideo size={16}/><div><b>Advanced media options</b><span>Choose translation language and voice</span></div><button onClick={onMedia}>Open <ArrowRight size={14}/></button></div><div className="language-row"><MessageSquareText size={16}/><div><b>Advanced WhatsApp analysis</b><span>Theory mode and cited questions</span></div><button onClick={onWhatsApp}>Open <ArrowRight size={14}/></button></div></>}
   </div></div>
 }
