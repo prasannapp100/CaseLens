@@ -16,10 +16,11 @@ export async function POST(request: Request) {
     const form = await request.formData()
     const file = form.get("file")
     const language = String(form.get("language") || "en-IN")
-    if (!(file instanceof File) || !file.name.toLowerCase().endsWith(".pdf")) {
-      return Response.json({ error: "Upload a PDF document." }, { status: 400 })
+    const extension = file instanceof File ? file.name.toLowerCase().split(".").pop() : ""
+    if (!(file instanceof File) || !["pdf", "png", "jpg", "jpeg", "zip"].includes(extension || "")) {
+      return Response.json({ error: "Upload a PDF, PNG, JPG, JPEG, or ZIP document." }, { status: 400 })
     }
-    if (file.size > 200 * 1024 * 1024) return Response.json({ error: "PDF files must be under 200 MB." }, { status: 413 })
+    if (file.size > 200 * 1024 * 1024) return Response.json({ error: "Documents must be under 200 MB." }, { status: 413 })
 
     workDirectory = await mkdtemp(join(tmpdir(), "caselens-doc-"))
     const inputPath = join(workDirectory, file.name.replace(/[^a-zA-Z0-9._-]/g, "_"))
@@ -36,7 +37,7 @@ export async function POST(request: Request) {
     await job.uploadFile(inputPath)
     await job.start()
     const status = await job.waitUntilComplete()
-    if (status.job_state === "Failed") throw new Error(status.error_message || "Sarvam could not digitize this PDF.")
+    if (status.job_state === "Failed") throw new Error(status.error_message || "Sarvam could not digitize this document.")
     await job.downloadOutput(outputPath)
 
     const archive = new AdmZip(outputPath)
@@ -50,18 +51,18 @@ export async function POST(request: Request) {
       .map((entry) => entry.getData().toString("utf8"))
       .join("\n")
     const text = markdown || jsonText
-    if (!text.trim()) throw new Error("Sarvam completed the PDF job but returned no extractable text.")
+    if (!text.trim()) throw new Error("Sarvam completed the job but returned no extractable text.")
 
     return Response.json({
       fileName: file.name,
-      mediaType: "application/pdf",
+      mediaType: file.type || `application/${extension}`,
       transcript: text,
       languageCode: language,
       jobId: job.jobId,
       pages: job.getPageMetrics(),
     })
   } catch (caught) {
-    return Response.json({ error: caught instanceof Error ? caught.message : "PDF processing failed." }, { status: 500 })
+    return Response.json({ error: caught instanceof Error ? caught.message : "Document processing failed." }, { status: 500 })
   } finally {
     if (workDirectory) await rm(workDirectory, { recursive: true, force: true })
   }

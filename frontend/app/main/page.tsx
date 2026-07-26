@@ -6,6 +6,7 @@ import {
   AlertTriangle, ArrowRight, BookOpen, Bot, Check, Clock3, FileAudio,
   FileText, FileVideo, FolderOpen, Languages, LoaderCircle, MessageSquareText,
   Search, Send, ShieldCheck, Sparkles, Upload, Users, X,
+  Plus, MessageCircle,
 } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
@@ -22,6 +23,8 @@ export default function MainWorkspace() {
   const [question, setQuestion] = useState("")
   const [answer, setAnswer] = useState("")
   const [answerSources, setAnswerSources] = useState([])
+  const [chatSessions, setChatSessions] = useState([])
+  const [activeChatId, setActiveChatId] = useState("")
   const [asking, setAsking] = useState(false)
   const [strength, setStrength] = useState(null)
   const [scoring, setScoring] = useState(false)
@@ -42,6 +45,27 @@ export default function MainWorkspace() {
       })
       .catch(() => undefined)
   }, [])
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      try {
+        const saved = JSON.parse(localStorage.getItem("caselens-chat-sessions") || "[]")
+        if (saved.length) { setChatSessions(saved); setActiveChatId(saved[0].id) }
+        else createChat()
+      } catch { createChat() }
+    })
+  }, [])
+
+  useEffect(() => {
+    if (chatSessions.length) localStorage.setItem("caselens-chat-sessions", JSON.stringify(chatSessions))
+  }, [chatSessions])
+
+  function createChat() {
+    const session = { id: crypto.randomUUID(), title: "New evidence chat", messages: [], createdAt: new Date().toISOString() }
+    setChatSessions(current => [session, ...current])
+    setActiveChatId(session.id)
+    setAnswer(""); setAnswerSources([]); setQuestion("")
+  }
 
   const events = useMemo(() => cases.flatMap(item => item.events.map(event => ({ ...event, caseTitle: item.title }))), [cases])
   const contradictions = useMemo(() => cases.flatMap(item => {
@@ -83,42 +107,44 @@ export default function MainWorkspace() {
     finally { setProcessing(false); setProgress("") }
   }
 
-  async function processEvidence(files) {
+  async function processEvidence(files, options = { translate: true, language: "en-IN" }) {
     setProcessing(true); setError("")
     try {
       const items = []
+      const skipped = []
       const media = files.filter(file => file.type.startsWith("audio/") || file.type.startsWith("video/"))
-      const pdfs = files.filter(file => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"))
+      const documents = files.filter(file => /\.(pdf|png|jpe?g|zip)$/i.test(file.name))
       const texts = files.filter(file => file.type === "text/plain" || file.name.toLowerCase().endsWith(".txt"))
       if (media.length) {
         setProgress(`Uploading ${media.length} media files as one Sarvam batch…`)
         const body = new FormData()
         media.forEach(file => body.append("files", file))
-        body.append("translateTranscript", "true"); body.append("targetLanguage", "en-IN")
+        body.append("translateTranscript", String(options.translate)); body.append("targetLanguage", options.language)
         const response = await fetch("/api/batch-process", { method: "POST", body })
-        const data = await response.json()
-        if (!response.ok) throw new Error(data.error || "Media processing failed.")
-        items.push(...data.items)
+        const data = await response.json().catch(() => ({}))
+        if (response.ok && Array.isArray(data.items)) items.push(...data.items)
+        else skipped.push(`Media: ${data.error || "processing skipped"}`)
       }
-      for (let index = 0; index < pdfs.length; index++) {
-        setProgress(`Digitizing PDF ${index + 1} of ${pdfs.length}…`)
-        const body = new FormData(); body.append("file", pdfs[index]); body.append("language", "en-IN")
-        const response = await fetch("/api/document-process", { method: "POST", body })
-        const data = await response.json()
-        if (!response.ok) throw new Error(data.error || "PDF processing failed.")
-        items.push(data)
+      for (let index = 0; index < documents.length; index++) {
+        setProgress(`Digitizing document ${index + 1} of ${documents.length} with Sarvam…`)
+        const body = new FormData(); body.append("file", documents[index]); body.append("language", options.language)
+        try {
+          const response = await fetch("/api/document-process", { method: "POST", body })
+          const data = await response.json().catch(() => ({}))
+          if (!response.ok) throw new Error(data.error || "digitization skipped")
+          items.push(data)
+        } catch (caught) { skipped.push(`${documents[index].name}: ${caught instanceof Error ? caught.message : "skipped"}`) }
       }
       for (let index = 0; index < texts.length; index++) {
         setProgress(`Reading TXT ${index + 1} of ${texts.length}…`)
         items.push({ fileName: texts[index].name, mediaType: "text/plain", transcript: await texts[index].text() })
       }
-      if (!items.length) throw new Error("Choose PDF, TXT, audio, or video files.")
+      if (!items.length) throw new Error("Choose audio, video, WhatsApp TXT, PDF, image, ZIP, or TXT evidence.")
       setProgress("Extracting claims and timeline events from every source…")
-      await buildEvidenceGraph(items)
+      try { await buildEvidenceGraph(items) } catch (caught) { skipped.push(`Knowledge graph: ${caught instanceof Error ? caught.message : "skipped"}`) }
       setProgress("Creating a grounded summary…")
       const summaryResponse = await fetch("/api/summarize", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) })
-      const summary = await summaryResponse.json()
-      if (!summaryResponse.ok) throw new Error(summary.error || "Summarization failed.")
+      const summary = await summaryResponse.json().catch(() => ({ summary: `${items.length} evidence sources processed.` }))
       setProgress("Saving to the knowledge base…")
       const saveResponse = await fetch("/api/knowledge", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -127,6 +153,7 @@ export default function MainWorkspace() {
       const saved = await saveResponse.json()
       if (!saveResponse.ok) throw new Error(saved.error || "Save failed.")
       await refresh()
+      if (skipped.length) console.warn("CaseLens skipped non-fatal processing errors:", skipped)
       setShowUpload(false); setSection("Overview")
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Processing failed.") }
     finally { setProcessing(false); setProgress("") }
@@ -134,13 +161,21 @@ export default function MainWorkspace() {
 
   async function ask() {
     if (!question.trim()) return
-    setAsking(true); setAnswer(""); setAnswerSources([]); setError("")
+    const sessionId = activeChatId || chatSessions[0]?.id
+    const session = chatSessions.find(item => item.id === sessionId)
+    const userMessage = { id: crypto.randomUUID(), role: "user", content: question, createdAt: new Date().toISOString() }
+    const history = session?.messages || []
+    setChatSessions(current => current.map(item => item.id === sessionId ? { ...item, title: item.messages.length ? item.title : question.slice(0, 42), messages: [...item.messages, userMessage] } : item))
+    const sentQuestion = question
+    setQuestion(""); setAsking(true); setAnswer(""); setAnswerSources([]); setError("")
     try {
-      const response = await fetch("/api/knowledge-query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) })
+      const response = await fetch("/api/knowledge-query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: sentQuestion, history: history.map(({ role, content }) => ({ role, content })) }) })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || "Question failed.")
       setAnswer(data.answer)
       setAnswerSources(data.sources || [])
+      const assistantMessage = { id: crypto.randomUUID(), role: "assistant", content: data.answer, sources: data.sources || [], createdAt: new Date().toISOString() }
+      setChatSessions(current => current.map(item => item.id === sessionId ? { ...item, messages: [...item.messages, assistantMessage] } : item))
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Question failed.") }
     finally { setAsking(false) }
   }
@@ -167,7 +202,7 @@ export default function MainWorkspace() {
       <div className="flex gap-x-4">
         
       <div className="flex items-center gap-3"><Link href="/matter" className="rounded-lg border px-3 py-2 text-xs font-semibold">matter</Link></div>
-      <div className="flex items-center gap-3"><Link href="/media" className="rounded-lg border px-3 py-2 text-xs font-semibold">media</Link></div>
+      <div className="flex items-center gap-2"><Link href="/media" className="rounded-lg border px-3 py-2 text-xs font-semibold">Media</Link><Link href="/digitize" className="rounded-lg bg-[#183f31] px-3 py-2 text-xs font-semibold text-white">Digitize sources</Link></div>
       <div className="flex items-center gap-3"><Link href="/cases" className="rounded-lg border px-3 py-2 text-xs font-semibold">CASES</Link></div>
       </div>
 
@@ -183,7 +218,7 @@ export default function MainWorkspace() {
         {section === "Evidence" && <Evidence items={store.items} selected={selected} onSelect={setSelected} />}
         {section === "Timeline" && <Timeline events={events} canBuild={store.items.length > 0} processing={processing} onBuild={rebuildGraph} />}
         {section === "Contradictions" && <Conflicts contradictions={contradictions} gaps={missingEvidence} />}
-        {section === "Ask CaseLens" && <Ask question={question} setQuestion={setQuestion} ask={ask} answer={answer} sources={answerSources} items={store.items} onSelect={(item) => { setSelected(item); setSection("Evidence") }} asking={asking} />}
+        {section === "Ask CaseLens" && <Ask question={question} setQuestion={setQuestion} ask={ask} sessions={chatSessions} activeId={activeChatId} setActiveId={setActiveChatId} createChat={createChat} items={store.items} onSelect={(item) => { setSelected(item); setSection("Evidence") }} asking={asking} />}
         {section === "Case brief" && <Brief collections={store.collections} cases={cases} items={store.items} />}
         {error && <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
       </section>
@@ -212,10 +247,15 @@ function Evidence({ items, selected, onSelect }) {
 function Timeline({ events, canBuild, processing, onBuild }) { return <section className="rounded-[18px] border border-black/8 bg-[#fffefc] p-7 shadow-[0_10px_35px_rgba(45,39,31,.05)]"><div className="flex items-start justify-between border-b pb-6"><div><p className="text-[11px] font-bold tracking-[.16em] text-[#855139] uppercase">Reconstructed chronology</p><h1 className="mt-2 font-serif text-3xl">Case timeline</h1></div><div className="flex items-center gap-3"><span className="rounded-full border bg-[#fafaf7] px-3 py-1.5 text-[10px] font-bold tracking-wider text-[#666b66] uppercase">{events.length} events</span>{canBuild && <button onClick={onBuild} disabled={processing} className="flex items-center gap-2 rounded-full border px-3 py-1.5 text-[10px] font-bold uppercase">{processing ? <LoaderCircle className="animate-spin" size={13} /> : <Sparkles size={13} />} Analyze</button>}</div></div>{!events.length ? <div className="mt-6"><Empty text="No events extracted yet. Analyze stored audio, video, PDF, and TXT evidence." /></div> : <div className="relative mt-7 before:absolute before:top-5 before:bottom-8 before:left-5 before:w-px before:bg-[#ced0ca]">{events.map((event, index) => <article key={`${event.id}-${index}`} className="relative grid grid-cols-[42px_1fr] gap-7 pb-11"><div className="relative z-10 grid size-10 place-items-center rounded-full border border-[#c8cac5] bg-[#fffefc] font-serif text-sm">{index + 1}</div><div className="pt-1"><div className="flex flex-wrap items-center gap-3"><b className="text-sm">{event.date === "unknown" ? "Date not established" : event.date}</b><span className="rounded-full border bg-[#fafaf7] px-2.5 py-1 text-[10px] font-bold text-[#6f746f] uppercase">{event.date === "unknown" ? "Inferred" : "Exact"}</span></div><h2 className="mt-3 font-serif text-[26px] leading-tight">{event.title}</h2><p className="mt-2 text-sm leading-7 text-[#6c716c]">{event.description}</p><div className="mt-3 flex flex-wrap gap-2">{event.sourceRefs.map((source, sourceIndex) => <span key={sourceIndex} className="inline-flex items-center gap-1.5 rounded-md bg-[#f0f1ed] px-2.5 py-1.5 text-[11px] text-[#525952]"><LinkIcon />{source}</span>)}</div></div></article>)}</div>}</section> }
 function LinkIcon() { return <span className="text-sm">↗</span> }
 function Conflicts({ contradictions, gaps }) { return <><PageHead title="Contradictions & gaps" text="Sarvam-generated review leads, not legal conclusions." />{!contradictions.length && !gaps.length ? <Empty text="No contradictions or missing evidence have been extracted." /> : <div className="grid gap-5 lg:grid-cols-2"><div className="space-y-3">{contradictions.map((item, index) => <article key={index} className="rounded-xl border border-amber-200 bg-amber-50 p-4"><p className="text-xs font-bold uppercase">{item.severity} relevance · {item.caseTitle}</p><h2 className="mt-2 font-semibold">{item.title}</h2><p className="mt-2 text-sm leading-6">{item.explanation}</p><p className="mt-2 text-xs font-semibold text-[#7b5b16]">{item.sourceRefs.length ? `Sources: ${item.sourceRefs.join(" · ")}` : `Claims: ${item.claimIds.join(" · ")}`}</p></article>)}</div><div className="space-y-3">{gaps.map((item, index) => <article key={index} className="rounded-xl border border-red-200 bg-red-50 p-4"><p className="text-xs font-bold uppercase">{item.importance} importance · {item.caseTitle}</p><h2 className="mt-2 font-semibold">{item.title}</h2><p className="mt-2 text-sm leading-6">{item.reason}</p><p className="mt-2 text-xs font-semibold text-red-800">Mentioned in: {item.mentionedIn.join(" · ")}</p></article>)}</div></div>}</> }
-function Ask({ question, setQuestion, ask, answer, sources, items, onSelect, asking }) { return <><PageHead title="Ask CaseLens" text="Answers use only evidence currently stored in the knowledge base." /><div className="rounded-2xl border bg-white p-5"><div className="flex gap-2"><input value={question} onChange={event => setQuestion(event.target.value)} onKeyDown={event => event.key === "Enter" && ask()} placeholder="Ask about the uploaded evidence…" className="h-12 flex-1 rounded-xl border px-4 text-sm outline-none" /><button onClick={ask} disabled={asking} className="grid size-12 place-items-center rounded-xl bg-[#183f31] text-white">{asking ? <LoaderCircle className="animate-spin" size={17} /> : <Send size={17} />}</button></div>{answer && <><div className="mt-5 whitespace-pre-wrap rounded-xl bg-[#f1f5f2] p-4 text-sm leading-6">{answer}</div><div className="mt-3 flex flex-wrap gap-2">{sources.map(source => <button key={source.id} onClick={() => onSelect(items.find(item => item.fileName === source.fileName))} className="rounded-lg border bg-white px-3 py-2 text-xs font-semibold text-[#356d56]">SOURCE-{source.id} · {source.fileName}</button>)}</div></>}</div></> }
+function Ask({ question, setQuestion, ask, sessions, activeId, setActiveId, createChat, items, onSelect, asking }) {
+  const active = sessions.find(item => item.id === activeId)
+  return <><PageHead title="Ask CaseLens" text="Persistent, source-grounded conversations with follow-up memory." /><div className="grid min-h-[68vh] overflow-hidden rounded-2xl border bg-white lg:grid-cols-[230px_1fr]"><aside className="border-r bg-[#f8f8f5] p-3"><button onClick={createChat} className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#183f31] px-3 py-2.5 text-xs font-semibold text-white"><Plus size={14} />New chat</button><div className="mt-3 space-y-1">{sessions.map(session => <button key={session.id} onClick={() => setActiveId(session.id)} className={`flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-xs ${activeId === session.id ? "bg-[#e5eee9] font-semibold text-[#285c47]" : "text-[#687069] hover:bg-black/5"}`}><MessageCircle size={14} /><span className="truncate">{session.title}</span></button>)}</div></aside><div className="flex min-h-0 flex-col"><div className="flex-1 space-y-4 overflow-auto p-5">{active?.messages?.length ? active.messages.map(message => <div key={message.id} className={message.role === "user" ? "ml-auto max-w-[80%]" : "mr-auto max-w-[88%]"}><div className={`whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === "user" ? "bg-[#183f31] text-white" : "bg-[#f0f4f1]"}`}>{message.content}</div>{message.sources?.length > 0 && <div className="mt-2 flex flex-wrap gap-2">{message.sources.map(source => <button key={source.id} onClick={() => onSelect(items.find(item => item.fileName === source.fileName))} className="rounded-lg border px-2.5 py-1.5 text-[10px] font-semibold text-[#356d56]">SOURCE-{source.id} · {source.fileName}</button>)}</div>}</div>) : <div className="grid h-full place-items-center text-center"><div><Bot className="mx-auto text-[#789084]" /><p className="mt-3 text-sm font-semibold">Start a new evidence conversation</p><p className="mt-1 text-xs text-[#7b837c]">Follow-ups remember this chat while answers remain grounded in uploaded sources.</p></div></div>}</div><div className="border-t p-4"><div className="flex gap-2"><input value={question} onChange={event => setQuestion(event.target.value)} onKeyDown={event => event.key === "Enter" && !event.shiftKey && ask()} placeholder="Ask a question or follow up…" className="h-12 flex-1 rounded-xl border px-4 text-sm outline-none" /><button onClick={ask} disabled={asking || !question.trim()} className="grid size-12 place-items-center rounded-xl bg-[#183f31] text-white disabled:opacity-50">{asking ? <LoaderCircle className="animate-spin" size={17} /> : <Send size={17} />}</button></div></div></div></div></>
+}
 function Brief({ collections, cases, items }) { return <><PageHead title="Case brief" text="Built only from uploaded and processed evidence." />{!collections.length ? <Empty /> : <article className="rounded-2xl border bg-white p-7"><h1 className="font-serif text-2xl font-semibold">Evidence brief</h1>{collections.map(collection => { const sources = items.filter(item => collection.itemIds.includes(item.id)); return <section key={collection.id} className="mt-6 border-t pt-5"><h2 className="font-semibold">{collection.title}</h2><p className="mt-2 whitespace-pre-wrap text-sm leading-6">{collection.summary}</p><div className="mt-3 flex flex-wrap gap-2">{sources.map(source => <span key={source.id} className="rounded-md bg-[#edf3ef] px-2.5 py-1.5 text-xs font-semibold text-[#356d56]">{source.fileName}</span>)}</div></section> })}{cases.map(item => <section key={item.id} className="mt-6 border-t pt-5"><h2 className="font-semibold">{item.title}</h2><p className="mt-2 text-sm leading-6">{item.overview}</p><p className="mt-2 text-xs text-[#39745d]">{item.events.flatMap(event => event.sourceRefs).filter((value, index, values) => values.indexOf(value) === index).join(" · ")}</p></section>)}</article>}</> }
 
 function UploadModal({ processing, progress, error, onClose, onProcess }) {
   const [files, setFiles] = useState([])
-  return <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-5"><div className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl"><button onClick={onClose} disabled={processing} className="float-right"><X /></button><div className="grid size-11 place-items-center rounded-xl bg-[#e9f2ed] text-[#356d56]"><Upload /></div><h2 className="mt-4 font-serif text-2xl font-semibold">{processing ? "Processing actual evidence…" : "Add evidence"}</h2><p className="mt-2 text-sm text-[#707871]">{processing ? progress : "Upload PDF, TXT, audio and video files together."}</p>{processing ? <div className="mt-8 flex items-center gap-3 rounded-xl bg-[#f2f5f2] p-4 text-sm"><LoaderCircle className="animate-spin" />{progress}</div> : <><label className="mt-6 grid min-h-44 cursor-pointer place-items-center rounded-xl border border-dashed bg-[#fafaf8] text-center"><div><Upload className="mx-auto mb-3 text-[#39745d]" /><b className="text-sm">{files.length ? `${files.length} files selected` : "Choose evidence files"}</b><p className="mt-1 text-xs text-[#8a918b]">PDF, TXT, MP4, WebM, MP3, M4A and WAV</p></div><input type="file" multiple accept=".pdf,.txt,audio/*,video/*" className="hidden" onChange={event => setFiles(Array.from(event.target.files || []))} /></label><button onClick={() => onProcess(files)} disabled={!files.length} className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#183f31] text-sm font-semibold text-white disabled:opacity-50"><Sparkles size={16} /> Process with Sarvam <ArrowRight size={15} /></button></>}{error && <p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}</div></div>
+  const [translate, setTranslate] = useState(true)
+  const [language, setLanguage] = useState("en-IN")
+  return <div className="fixed inset-0 z-50 grid place-items-center overflow-auto bg-black/45 p-5"><div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl"><button onClick={onClose} disabled={processing} className="float-right"><X /></button><div className="grid size-11 place-items-center rounded-xl bg-[#e9f2ed] text-[#356d56]"><Upload /></div><h2 className="mt-4 font-serif text-2xl font-semibold">{processing ? "Processing actual evidence…" : "Add all evidence"}</h2><p className="mt-2 text-sm text-[#707871]">{processing ? progress : "One place for video transcription, translation, WhatsApp exports, scans, documents, audio, and text."}</p>{processing ? <div className="mt-8 flex items-center gap-3 rounded-xl bg-[#f2f5f2] p-4 text-sm"><LoaderCircle className="animate-spin" />{progress}</div> : <><div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">{[["Video/audio","Transcribe"],["WhatsApp TXT","Analyze"],["PDF/scans","Digitize"],["ZIP/TXT","Extract"]].map(([title, action]) => <div key={title} className="rounded-xl border bg-[#fafaf8] p-3"><p className="text-xs font-semibold">{title}</p><p className="mt-1 text-[10px] text-[#7f8781]">{action} with Sarvam</p></div>)}</div><label className="mt-4 grid min-h-40 cursor-pointer place-items-center rounded-xl border border-dashed bg-[#fafaf8] text-center"><div><Upload className="mx-auto mb-3 text-[#39745d]" /><b className="text-sm">{files.length ? `${files.length} files selected` : "Choose mixed evidence files"}</b><p className="mt-1 text-xs text-[#8a918b]">Audio, video, WhatsApp TXT, PDF, JPG, PNG, ZIP</p></div><input type="file" multiple accept=".pdf,.txt,.png,.jpg,.jpeg,.zip,audio/*,video/*" className="hidden" onChange={event => setFiles(Array.from(event.target.files || []))} /></label><div className="mt-4 grid gap-3 sm:grid-cols-2"><label className="rounded-xl border p-3"><span className="text-xs font-semibold">Translation language</span><select value={language} onChange={event => setLanguage(event.target.value)} className="mt-2 w-full bg-transparent text-sm outline-none"><option value="en-IN">English</option><option value="hi-IN">Hindi</option><option value="kn-IN">Kannada</option><option value="ta-IN">Tamil</option><option value="te-IN">Telugu</option><option value="bn-IN">Bengali</option><option value="mr-IN">Marathi</option><option value="ml-IN">Malayalam</option><option value="gu-IN">Gujarati</option><option value="pa-IN">Punjabi</option></select></label><label className="flex items-center justify-between rounded-xl border p-3"><span><span className="block text-xs font-semibold">Translate transcripts</span><span className="text-[10px] text-[#858c86]">Keep original and translated text</span></span><input type="checkbox" checked={translate} onChange={event => setTranslate(event.target.checked)} className="size-4 accent-[#183f31]" /></label></div><button onClick={() => onProcess(files, { translate, language })} disabled={!files.length} className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#183f31] text-sm font-semibold text-white disabled:opacity-50"><Sparkles size={16} /> Process everything with Sarvam <ArrowRight size={15} /></button></>}{error && <p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}</div></div>
 }

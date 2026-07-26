@@ -69,9 +69,17 @@ async function translate(text: string, targetLanguage: string, key: string) {
           mode: "modern-colloquial",
         }),
       })
-      const body = await response.json()
+      const raw = await response.text()
+      let body: Record<string, unknown> = {}
+      try { body = JSON.parse(raw) } catch {
+        if (attempt < 3) {
+          await new Promise((resolve) => setTimeout(resolve, 750 * 2 ** attempt))
+          continue
+        }
+        throw new Error("Sarvam translation returned an unreadable response.")
+      }
       if (response.ok) {
-        translated.push(body.translated_text)
+        translated.push(String(body.translated_text || chunk))
         completed = true
         break
       }

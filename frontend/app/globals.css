@@ -162,11 +162,11 @@ body {
 button,
 input {
   font: inherit;
-  color: inherit
+  /* color: inherit */
 }
 
 button {
-  cursor: pointer
+  cursor: pointer;
 }
 
 .app-shell {
