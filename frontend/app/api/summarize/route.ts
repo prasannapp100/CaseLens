@@ -23,16 +23,26 @@ export async function POST(request: Request) {
       model: "sarvam-30b",
       reasoning_effort: null,
       temperature: 0.2,
-      max_tokens: 1200,
+      max_tokens: 650,
       messages: [
         {
           role: "system",
           content:
-            "You create faithful knowledge-base summaries. Combine all sources, identify key themes, decisions, facts and action items. Never invent information. Mention disagreements between sources.",
+            `You create concise, highly scannable evidence notes. Never invent information.
+Return Markdown using exactly these sections when supported by evidence:
+## Overview
+Maximum 2 sentences.
+## Key facts
+Maximum 5 short bullets.
+## Evidence gaps
+Maximum 3 short bullets; omit if none.
+## Next actions
+Maximum 3 short bullets; omit if none.
+Do not repeat facts across sections. Do not add generic commentary, review status, introductions, or conclusions. Keep the total under 250 words.`,
         },
         {
           role: "user",
-          content: `Summarize the following media transcripts as a concise, structured knowledge note. Start with a short overview, followed by key points and action items when present.\n\n${source}`,
+          content: `Create the concise evidence note from these sources:\n\n${source}`,
         },
       ],
     }),

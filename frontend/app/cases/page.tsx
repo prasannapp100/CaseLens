@@ -3,6 +3,7 @@
 import { AlertTriangle, ArrowLeft, Brain, FileText, GitBranch, HelpCircle, LoaderCircle, Search, ShieldAlert, Upload, Users } from "lucide-react"
 import Link from "next/link"
 import { useState } from "react"
+import { MarkdownContent } from "@/components/markdown-content"
 
 type Analysis = {
   id: string; title: string; overview: string
@@ -81,7 +82,7 @@ export default function CasesPage() {
             <div><p className="mb-2 flex items-center gap-2 text-sm font-semibold"><ShieldAlert size={16} /> Case theory</p><textarea value={theory} onChange={(e) => setTheory(e.target.value)} placeholder="The client completed all payments before termination." className="h-24 w-full resize-none rounded-xl border p-3 text-sm outline-none" /><div className="mt-2 flex gap-2"><button onClick={() => ask("theory")} disabled={!theory || asking} className="rounded-lg bg-[#183f31] px-4 py-2 text-xs font-semibold text-white">Evaluate</button><button onClick={() => ask("attack")} disabled={!theory || asking} className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-xs font-semibold text-red-700">Attack my theory</button></div></div>
           </div>
           {asking && <p className="mt-5 flex items-center gap-2 text-sm"><LoaderCircle size={15} className="animate-spin" /> Reasoning over the evidence graph…</p>}
-          {answer && <div className="mt-5 whitespace-pre-wrap rounded-xl bg-[#f2f5f1] p-4 text-sm leading-6">{answer}</div>}
+          {answer && <div className="mt-5 rounded-xl bg-[#f2f5f1] p-4"><MarkdownContent content={answer} compact /></div>}
           {error && <ErrorMessage text={error} />}
         </section>
       </div>}
