@@ -19,6 +19,7 @@ import {
 } from "lucide-react"
 import { ChangeEvent, DragEvent, useEffect, useRef, useState } from "react"
 import Link from "next/link"
+import { MarkdownContent } from "@/components/markdown-content"
 
 const languages = [
   ["hi-IN", "Hindi"], ["bn-IN", "Bengali"], ["ta-IN", "Tamil"],
@@ -277,7 +278,7 @@ export default function Page() {
             {result ? (
               <div className="rounded-[22px] border border-[#cbdcd3] bg-[#f1f7f3] p-5 shadow-[0_12px_35px_rgba(38,70,53,.07)]">
                 <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-[#286048]"><span className="grid size-6 place-items-center rounded-full bg-[#d5e9dd]"><Check size={14} /></span> Ready</div>
-                {result.summary && <div className="mb-5 rounded-xl border border-[#d2dfd7] bg-white p-4"><p className="mb-2 flex items-center gap-2 text-[10px] font-bold tracking-[.14em] text-[#4d715f] uppercase"><Sparkles size={13} /> Combined summary</p><p className="whitespace-pre-wrap text-sm leading-6 text-[#39453e]">{result.summary}</p></div>}
+                {result.summary && <div className="mb-5 rounded-xl border border-[#d2dfd7] bg-white p-4"><p className="mb-3 flex items-center gap-2 text-[10px] font-bold tracking-[.14em] text-[#4d715f] uppercase"><Sparkles size={13} /> Combined summary</p><MarkdownContent content={result.summary} compact /></div>}
                 {result.audio && <>
                   <audio className="w-full" controls src={result.audio} />
                   <a href={result.audio} download={`caselends-${language}.wav`} className="mt-3 flex h-10 items-center justify-center gap-2 rounded-lg border border-[#bcd1c5] bg-white text-xs font-semibold text-[#285c47] hover:bg-[#f8fbf9]"><Download size={14} /> Download dubbed audio</a>

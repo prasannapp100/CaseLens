@@ -10,6 +10,7 @@ export type KnowledgeItem = {
   transcript: string
   translatedText?: string
   languageCode?: string
+  segments?: Array<{ text: string; start: number; end: number; speaker?: string }>
   createdAt: string
 }
 
